@@ -1,6 +1,5 @@
 # Description
 
-This repository is meant to serve as a general template for how to set up new repositories in the JogetOSS organization. 
 The JWT SSO Directory Manager plugin is designed to work together with the JWT SSO Web Service plugin (https://github.com/jogetoss/jwt-sso-webservice) to allow users to single sign-on (SSO) to Joget using another Joget as the IdP.
 
 # Getting Help
