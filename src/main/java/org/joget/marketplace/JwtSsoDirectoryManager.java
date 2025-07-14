@@ -16,10 +16,12 @@ import org.joget.directory.model.service.UserSecurityFactory;
 import org.joget.plugin.directory.SecureDirectoryManager;
 import org.joget.plugin.directory.SecureDirectoryManagerImpl;
 import org.joget.workflow.model.dao.WorkflowHelper;
+import org.joget.workflow.model.service.WorkflowUserManager;
 import org.joget.workflow.util.WorkflowUtil;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.web.savedrequest.HttpSessionRequestCache;
@@ -28,6 +30,7 @@ import org.springframework.security.web.savedrequest.SavedRequest;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
 import java.io.IOException;
 import java.security.KeyFactory;
 import java.security.PublicKey;
@@ -37,6 +40,8 @@ import java.util.*;
 public class JwtSsoDirectoryManager extends SecureDirectoryManager {
 
     public SecureDirectoryManagerImpl dirManager;
+
+    public static String SESSION_KEY_REDIRECTION = "ssoRedirect";
 
     @Override
     public String getName() {
@@ -124,6 +129,12 @@ public class JwtSsoDirectoryManager extends SecureDirectoryManager {
             if (!serverUrl.endsWith("/")) {
                 serverUrl += "/";
             }
+
+            String redirect = request.getParameter("redirect");
+            if(redirect != null && redirect.trim().length() > 0){
+                request.getSession().setAttribute(SESSION_KEY_REDIRECTION, request.getParameter("redirect"));
+            }
+
             response.sendRedirect(serverUrl + "web/json/plugin/org.joget.marketplace.JwtSsoWebService/service?clientId=" + clientId);
 
         } else {
@@ -215,7 +226,15 @@ public class JwtSsoDirectoryManager extends SecureDirectoryManager {
                 // login user
                 UsernamePasswordAuthenticationToken result = new UsernamePasswordAuthenticationToken(user.getUsername(), "", gaList);
                 result.setDetails(details);
-                SecurityContextHolder.getContext().setAuthentication(result);
+
+                SecurityContext securityContext = SecurityContextHolder.getContext();
+                securityContext.setAuthentication(result);
+
+                HttpSession session = request.getSession(true);
+                session.setAttribute("SPRING_SECURITY_CONTEXT", securityContext);
+
+                //WorkflowUserManager wum = (WorkflowUserManager) AppUtil.getApplicationContext().getBean("workflowUserManager");
+                //wum.setCurrentThreadUser(user);
 
                 // add audit trail
                 WorkflowHelper workflowHelper = (WorkflowHelper) AppUtil.getApplicationContext().getBean("workflowHelper");
@@ -226,7 +245,7 @@ public class JwtSsoDirectoryManager extends SecureDirectoryManager {
                 if (relayState != null && !relayState.isEmpty()) {
                     response.sendRedirect(relayState);
                 } else {
-                    Object redirect = request.getSession().getAttribute("oidcRedirect");
+                    Object redirect = request.getSession().getAttribute(SESSION_KEY_REDIRECTION);
 
                     if(redirect != null){
                         String redirectUrl = (String) redirect;
