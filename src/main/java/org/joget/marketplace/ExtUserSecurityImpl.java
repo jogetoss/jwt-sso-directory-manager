@@ -1,5 +1,7 @@
 package org.joget.marketplace;
 
+import java.io.UnsupportedEncodingException;
+import java.net.URLEncoder;
 import org.joget.apps.app.service.AppUtil;
 import org.joget.commons.util.ResourceBundleUtil;
 import org.joget.directory.model.service.DirectoryManagerProxyImpl;
@@ -10,13 +12,15 @@ import org.joget.plugin.directory.SecureDirectoryManagerImpl;
 import org.joget.plugin.directory.UserSecurityImpl;
 
 import java.util.Map;
+import javax.servlet.http.HttpServletRequest;
+import org.joget.workflow.util.WorkflowUtil;
 
 public class ExtUserSecurityImpl extends UserSecurityImpl implements HiddenPlugin {
 
     public ExtUserSecurityImpl() {
         super();
     }
-    
+
     @Override
     public String getName() {
         return "JWT SSO User Security";
@@ -31,7 +35,7 @@ public class ExtUserSecurityImpl extends UserSecurityImpl implements HiddenPlugi
     public String getVersion() {
         return "8.0-SNAPSHOT";
     }
-    
+
     @Override
     public String getLabel() {
         return "JWT SSO User Security";
@@ -47,23 +51,35 @@ public class ExtUserSecurityImpl extends UserSecurityImpl implements HiddenPlugi
 
         // original footer
         String content = "";
-        
+
         if ("true".equals(getPropertyString("enableForgotPassword"))) {
-            content += "<a rel=\"popup\" style=\"cursor:pointer;text-decoration:underline;\" onclick=\"forgotPassword();return false;\">"+ResourceBundleUtil.getMessage("app.edm.label.forgotPassword")+"</a>\n";
+            content += "<a rel=\"popup\" style=\"cursor:pointer;text-decoration:underline;\" onclick=\"forgotPassword();return false;\">" + ResourceBundleUtil.getMessage("app.edm.label.forgotPassword") + "</a>\n";
 
             String contextPath = AppUtil.getRequestContextPath();
-            content += "<script>function forgotPassword(){new PopupDialog('" + contextPath + "/web/json/plugin/"+UserSecurityImpl.class.getName()+"/service?a=fp', ' ').init();}</script>";
+            content += "<script>function forgotPassword(){new PopupDialog('" + contextPath + "/web/json/plugin/" + UserSecurityImpl.class.getName() + "/service?a=fp', ' ').init();}</script>";
 
             String token = getForgotPasswordToken();
             if (token != null) {
-                content += "<script>$(document).ready(function(){new PopupDialog('" + contextPath + "/web/json/plugin/"+UserSecurityImpl.class.getName()+"/service?a=fpcp&t="+token+"', ' ').init();});</script>";
+                content += "<script>$(document).ready(function(){new PopupDialog('" + contextPath + "/web/json/plugin/" + UserSecurityImpl.class.getName() + "/service?a=fpcp&t=" + token + "', ' ').init();});</script>";
             }
         }
 
         for (UserSecurity us : getSubUserSecurityImpls()) {
             content += us.getLoginFormFooter();
         }
-        String redirectUrl = JwtSsoDirectoryManager.getCallbackURL()+"?login=1";
+        String redirectUrl = JwtSsoDirectoryManager.getCallbackURL() + "?login=1";
+
+        HttpServletRequest request = WorkflowUtil.getHttpServletRequest();
+        String redirect = request.getHeader("Referer");
+
+        if (redirect != null && redirect.trim().length() > 0) {
+            try {
+                redirectUrl += "&redirect=" + URLEncoder.encode(redirect, "UTF-8");
+            } catch (UnsupportedEncodingException e) {
+                redirectUrl += "&redirect=" + redirect;
+            }
+        }
+
         // append login button
         content += "<style>\n"
                 + "#openIDLogin {\n"
