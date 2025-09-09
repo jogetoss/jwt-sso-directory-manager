@@ -206,6 +206,39 @@ public class JwtSsoDirectoryManager extends SecureDirectoryManager {
                 // add user
                 UserDao userDao = (UserDao) AppUtil.getApplicationContext().getBean("userDao");
                 userDao.addUser(user);
+            } else if (user != null && userProvisioningEnabled) {
+                // user exits, update
+                //user = new User();
+                //user.setId(username);
+                //user.setUsername(username);
+                //user.setTimeZone("0");
+                //user.setActive(1);
+                if (email != null && !email.isEmpty()) {
+                    user.setEmail(email);
+                }
+
+                if (firstName != null && !firstName.isEmpty()) {
+                    user.setFirstName(firstName);
+                }
+
+                if (lastName != null && !lastName.isEmpty()) {
+                    user.setLastName(lastName);
+                }
+
+                // set role
+                /*
+                RoleDao roleDao = (RoleDao) AppUtil.getApplicationContext().getBean("roleDao");
+                Set roleSet = new HashSet();
+                Role r = roleDao.getRole("ROLE_USER");
+                if (r != null) {
+                    roleSet.add(r);
+                }
+                user.setRoles(roleSet);
+                */
+                
+                UserDao userDao = (UserDao) AppUtil.getApplicationContext().getBean("userDao");
+                userDao.updateUser(user);
+                
             } else if (user == null && !userProvisioningEnabled) {
                 response.sendRedirect(request.getContextPath() + "/web/login?login_error=1");
                 return;
