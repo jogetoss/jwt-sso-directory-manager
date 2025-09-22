@@ -135,7 +135,7 @@ public class JwtSsoDirectoryManager extends SecureDirectoryManager {
                 request.getSession().setAttribute(SESSION_KEY_REDIRECTION, request.getParameter("redirect"));
             }
 
-            response.sendRedirect(serverUrl + "web/json/plugin/org.joget.marketplace.JwtSsoWebService/service?clientId=" + clientId);
+            response.sendRedirect(serverUrl + "web/json/plugin/org.joget.marketplace.JwtSsoWebService/service?clientId=" + clientId + "&redirect=" + redirect);
 
         } else {
 
