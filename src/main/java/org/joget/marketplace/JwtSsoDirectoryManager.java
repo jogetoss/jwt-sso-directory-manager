@@ -32,6 +32,8 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.net.URLEncoder;
 import java.security.KeyFactory;
 import java.security.PublicKey;
 import java.security.spec.X509EncodedKeySpec;
@@ -131,26 +133,66 @@ public class JwtSsoDirectoryManager extends SecureDirectoryManager {
             }
 
             String redirect = request.getParameter("redirect");
-            if(redirect != null && redirect.trim().length() > 0){
+            String callbackUrl = request.getParameter("callbackUrl");
+
+            if (redirect != null && redirect.trim().length() > 0) {
+                request.getSession().setAttribute(SESSION_KEY_REDIRECTION, redirect);
+            }
+
+            if (callbackUrl != null && callbackUrl.trim().length() > 0) {
+                request.getSession().setAttribute("SESSION_KEY_CALLBACKURL", callbackUrl);
+            }
+
+            String finalUrl = serverUrl
+                    + "web/json/plugin/org.joget.marketplace.JwtSsoWebService/service"
+                    + "?clientId=" + clientId;
+
+            if (redirect != null && redirect.trim().length() > 0) {
+                try {
+                    finalUrl += "&redirect=" + URLEncoder.encode(redirect, "UTF-8");
+                } catch (UnsupportedEncodingException e) {
+                    finalUrl += "&redirect=" + redirect;
+                }
+            }
+
+            if (callbackUrl != null && callbackUrl.trim().length() > 0) {
+                try {
+                    finalUrl += "&callbackUrl=" + URLEncoder.encode(callbackUrl, "UTF-8");
+                } catch (UnsupportedEncodingException e) {
+                    finalUrl += "&callbackUrl=" + callbackUrl;
+                }
+            }
+
+            response.sendRedirect(finalUrl);
+
+            /*
+
+            if (redirect != null && redirect.trim().length() > 0) {
                 request.getSession().setAttribute(SESSION_KEY_REDIRECTION, request.getParameter("redirect"));
             }
 
             response.sendRedirect(serverUrl + "web/json/plugin/org.joget.marketplace.JwtSsoWebService/service?clientId=" + clientId + "&redirect=" + redirect);
-
+             */
         } else {
 
             //String secretKey = SecurityUtil.decrypt(dmImpl.getPropertyString("secretKey"));
             String publicKeyString = dmImpl.getPropertyString("publicKey");
             boolean userProvisioningEnabled = Boolean.parseBoolean(dmImpl.getPropertyString("userProvisioning"));
+            boolean userUpdateEnabled = Boolean.parseBoolean(dmImpl.getPropertyString("userUpdateEnabled"));
 
             String jwt = request.getParameter("jwt");
-            if (jwt == null || jwt.isEmpty()) {
+            if (jwt == null || jwt.trim().isEmpty()) {
                 LogUtil.info(getClass().getName(), "jwt is missing");
                 response.sendError(HttpServletResponse.SC_UNAUTHORIZED);
                 return;
             }
 
             PublicKey publicKey = loadPublicKey(publicKeyString);
+            if (publicKey == null) {
+                LogUtil.info(getClass().getName(), "public key is invalid");
+                response.sendError(HttpServletResponse.SC_UNAUTHORIZED);
+                return;
+            }
 
             String username = null;
             String firstName = null;
@@ -173,6 +215,14 @@ public class JwtSsoDirectoryManager extends SecureDirectoryManager {
 
             } catch (Exception e) {
                 LogUtil.error(getClass().getName(), e, "error validating jwt");
+                response.sendError(HttpServletResponse.SC_UNAUTHORIZED);
+                return;
+            }
+
+            if (username == null || username.trim().isEmpty()) {
+                LogUtil.info(getClass().getName(), "username claim is missing or empty");
+                response.sendError(HttpServletResponse.SC_UNAUTHORIZED);
+                return;
             }
 
             User user = dmImpl.getUserByUsername(username);
@@ -206,13 +256,7 @@ public class JwtSsoDirectoryManager extends SecureDirectoryManager {
                 // add user
                 UserDao userDao = (UserDao) AppUtil.getApplicationContext().getBean("userDao");
                 userDao.addUser(user);
-            } else if (user != null && userProvisioningEnabled) {
-                // user exits, update
-                //user = new User();
-                //user.setId(username);
-                //user.setUsername(username);
-                //user.setTimeZone("0");
-                //user.setActive(1);
+            } else if (user != null && userProvisioningEnabled && userUpdateEnabled) {
                 if (email != null && !email.isEmpty()) {
                     user.setEmail(email);
                 }
@@ -224,21 +268,11 @@ public class JwtSsoDirectoryManager extends SecureDirectoryManager {
                 if (lastName != null && !lastName.isEmpty()) {
                     user.setLastName(lastName);
                 }
-
-                // set role
-                /*
-                RoleDao roleDao = (RoleDao) AppUtil.getApplicationContext().getBean("roleDao");
-                Set roleSet = new HashSet();
-                Role r = roleDao.getRole("ROLE_USER");
-                if (r != null) {
-                    roleSet.add(r);
-                }
-                user.setRoles(roleSet);
-                */
-                
+                WorkflowUserManager wum = (WorkflowUserManager) AppUtil.getApplicationContext().getBean("workflowUserManager");
+                wum.setSystemThreadUser(true);
                 UserDao userDao = (UserDao) AppUtil.getApplicationContext().getBean("userDao");
                 userDao.updateUser(user);
-                
+
             } else if (user == null && !userProvisioningEnabled) {
                 response.sendRedirect(request.getContextPath() + "/web/login?login_error=1");
                 return;
@@ -268,7 +302,6 @@ public class JwtSsoDirectoryManager extends SecureDirectoryManager {
 
                 //WorkflowUserManager wum = (WorkflowUserManager) AppUtil.getApplicationContext().getBean("workflowUserManager");
                 //wum.setCurrentThreadUser(user);
-
                 // add audit trail
                 WorkflowHelper workflowHelper = (WorkflowHelper) AppUtil.getApplicationContext().getBean("workflowHelper");
                 workflowHelper.addAuditTrail(this.getClass().getName(), "authenticate", "Authentication for user " + username + ": " + true);
@@ -280,10 +313,10 @@ public class JwtSsoDirectoryManager extends SecureDirectoryManager {
                 } else {
                     Object redirect = request.getSession().getAttribute(SESSION_KEY_REDIRECTION);
 
-                    if(redirect != null){
+                    if (redirect != null) {
                         String redirectUrl = (String) redirect;
                         response.sendRedirect(redirectUrl);
-                    }else{
+                    } else {
                         SavedRequest savedRequest = new HttpSessionRequestCache().getRequest(request, response);
                         String savedUrl = "";
                         if (savedRequest != null) {

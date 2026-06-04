@@ -68,6 +68,7 @@ public class ExtUserSecurityImpl extends UserSecurityImpl implements HiddenPlugi
             content += us.getLoginFormFooter();
         }
         String redirectUrl = JwtSsoDirectoryManager.getCallbackURL() + "?login=1";
+        String callbackUrl = JwtSsoDirectoryManager.getCallbackURL();
 
         HttpServletRequest request = WorkflowUtil.getHttpServletRequest();
         String redirect = request.getHeader("Referer");
@@ -78,6 +79,12 @@ public class ExtUserSecurityImpl extends UserSecurityImpl implements HiddenPlugi
             } catch (UnsupportedEncodingException e) {
                 redirectUrl += "&redirect=" + redirect;
             }
+        }
+
+        try {
+            redirectUrl += "&callbackUrl=" + URLEncoder.encode(callbackUrl, "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            redirectUrl += "&callbackUrl=" + callbackUrl;
         }
 
         // append login button

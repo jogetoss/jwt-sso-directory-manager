@@ -42,6 +42,18 @@
                     }
                 ]
             },
+            {
+                "name": "userUpdateEnabled",
+                "label": "@@properties.user.userUpdateEnabled@@",
+                "type": "checkbox",
+                "value": "true",
+                "options": [
+                    {
+                        "value": "true",
+                        "label": ""
+                    }
+                ]
+            }
         ]
     },
     {
