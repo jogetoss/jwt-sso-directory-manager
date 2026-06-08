@@ -221,8 +221,9 @@ public class JwtSsoDirectoryManager extends SecureDirectoryManager {
 
             if (username == null || username.trim().isEmpty()) {
                 LogUtil.info(getClass().getName(), "username claim is missing or empty");
-                response.sendError(HttpServletResponse.SC_UNAUTHORIZED);
-                return;
+                request.getSession().setAttribute("SPRING_SECURITY_LAST_EXCEPTION", new Exception(ResourceBundleUtil.getMessage("AbstractUserDetailsAuthenticationProvider.badCredentials")));
+                String url = request.getContextPath() + "/web/login?login_error=1";
+                response.sendRedirect(url);
             }
 
             User user = dmImpl.getUserByUsername(username);
