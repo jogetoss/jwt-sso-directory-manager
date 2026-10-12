@@ -3,9 +3,9 @@ package org.joget.marketplace;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import org.joget.apps.app.service.AppUtil;
-import org.joget.apps.workflow.security.WorkflowUserDetails;
 import org.joget.commons.util.LogUtil;
 import org.joget.commons.util.ResourceBundleUtil;
+import org.joget.commons.util.SecurityUtil;
 import org.joget.directory.dao.RoleDao;
 import org.joget.directory.dao.UserDao;
 import org.joget.directory.model.Role;
@@ -18,19 +18,10 @@ import org.joget.plugin.directory.SecureDirectoryManagerImpl;
 import org.joget.workflow.model.dao.WorkflowHelper;
 import org.joget.workflow.model.service.WorkflowUserManager;
 import org.joget.workflow.util.WorkflowUtil;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.core.context.SecurityContext;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.security.web.savedrequest.HttpSessionRequestCache;
-import org.springframework.security.web.savedrequest.SavedRequest;
 
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.HttpSession;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
@@ -44,6 +35,13 @@ public class JwtSsoDirectoryManager extends SecureDirectoryManager {
     public SecureDirectoryManagerImpl dirManager;
 
     public static String SESSION_KEY_REDIRECTION = "ssoRedirect";
+
+    /**
+     * Prefix for the session attribute holding an already-verified JWT, keyed by the
+     * one-time nonce submitted as the "password" in the auto-submit login form (see
+     * buildAutoSubmitLoginForm / ExtSecureDirectoryManagerImpl.authenticate).
+     */
+    public static final String SESSION_KEY_PENDING_JWT_PREFIX = "jwtSsoPendingJwt_";
 
     @Override
     public String getName() {
@@ -280,55 +278,31 @@ public class JwtSsoDirectoryManager extends SecureDirectoryManager {
             }
 
             try {
-                // get authorities
-                UserDetails details = new WorkflowUserDetails(user);
-                Collection<Role> roles = dm.getUserRoles(user.getUsername());
-                List<GrantedAuthority> gaList = new ArrayList<>();
-                if (roles != null && !roles.isEmpty()) {
-                    for (Role role : roles) {
-                        GrantedAuthority ga = new SimpleGrantedAuthority(role.getId());
-                        gaList.add(ga);
-                    }
-                }
+                // Do NOT set SecurityContextHolder directly here - on multi-tenant-hardened
+                // Joget servers, EnterpriseJogetSecurityContextImpl silently blocks
+                // setAuthentication() calls made from plugin code (only Spring's own
+                // AbstractAuthenticationProcessingFilter, and a short list of Joget core
+                // classes, are trusted to do this).
+                //
+                // Instead, submit a real login POST to /j_spring_security_check, which
+                // routes through Joget's normal, already-whitelisted login filter chain -
+                // Spring's own filter is what ends up calling setAuthentication(), so the
+                // hardening check passes.
+                //
+                // The JWT itself (RS256, ~550-600 chars) can't be used directly as the
+                // password: UserAuthenticationService.loginUser(Authentication) silently
+                // skips calling authenticate() at all for passwords over 512 characters.
+                // So stash the already-verified JWT server-side keyed by a short one-time
+                // nonce, and submit the nonce as the password - authenticate() below looks
+                // the JWT back up by that nonce.
+                String nonce = java.util.UUID.randomUUID().toString();
+                request.getSession(true).setAttribute(SESSION_KEY_PENDING_JWT_PREFIX + nonce, jwt);
 
-                // login user
-                UsernamePasswordAuthenticationToken result = new UsernamePasswordAuthenticationToken(user.getUsername(), "", gaList);
-                result.setDetails(details);
-
-                SecurityContext securityContext = SecurityContextHolder.getContext();
-                securityContext.setAuthentication(result);
-
-                HttpSession session = request.getSession(true);
-                session.setAttribute("SPRING_SECURITY_CONTEXT", securityContext);
-
-                //WorkflowUserManager wum = (WorkflowUserManager) AppUtil.getApplicationContext().getBean("workflowUserManager");
-                //wum.setCurrentThreadUser(user);
-                // add audit trail
                 WorkflowHelper workflowHelper = (WorkflowHelper) AppUtil.getApplicationContext().getBean("workflowHelper");
                 workflowHelper.addAuditTrail(this.getClass().getName(), "authenticate", "Authentication for user " + username + ": " + true);
 
-                // redirect
-                String relayState = request.getParameter("RelayState");
-                if (relayState != null && !relayState.isEmpty()) {
-                    response.sendRedirect(relayState);
-                } else {
-                    Object redirect = request.getSession().getAttribute(SESSION_KEY_REDIRECTION);
-
-                    if (redirect != null) {
-                        String redirectUrl = (String) redirect;
-                        response.sendRedirect(redirectUrl);
-                    } else {
-                        SavedRequest savedRequest = new HttpSessionRequestCache().getRequest(request, response);
-                        String savedUrl = "";
-                        if (savedRequest != null) {
-                            savedUrl = savedRequest.getRedirectUrl();
-                        } else {
-                            savedUrl = request.getContextPath();
-                        }
-                        response.sendRedirect(savedUrl);
-                    }
-                }
-
+                response.setContentType("text/html;charset=UTF-8");
+                response.getWriter().write(buildAutoSubmitLoginForm(request, username, nonce));
             } catch (IOException | RuntimeException ex) {
                 LogUtil.error(getClass().getName(), ex, "Error in JWT SSO login");
                 request.getSession().setAttribute("SPRING_SECURITY_LAST_EXCEPTION", new Exception(ResourceBundleUtil.getMessage("AbstractUserDetailsAuthenticationProvider.badCredentials")));
@@ -338,14 +312,57 @@ public class JwtSsoDirectoryManager extends SecureDirectoryManager {
         }
     }
 
-    protected PublicKey loadPublicKey(String publicKeyString) {
+    /**
+     * A tiny self-submitting HTML form that POSTs the one-time nonce (as the password)
+     * to Joget's standard Spring Security login endpoint, so the real login filter
+     * chain performs the authentication instead of plugin code touching
+     * SecurityContextHolder directly. See SESSION_KEY_PENDING_JWT_PREFIX for why a
+     * nonce is used instead of the JWT itself.
+     */
+    protected String buildAutoSubmitLoginForm(HttpServletRequest request, String username, String nonce) {
+        String loginPath = request.getContextPath() + "/j_spring_security_check";
+
+        // CSRFGuard issues a token per target URI, not per session - the token for the
+        // current callback URL won't validate against a POST to /j_spring_security_check.
+        // Request one scoped to that exact URI so the auto-submitted form isn't rejected
+        // as a forged request.
+        String csrfTokenName = null;
+        String csrfTokenValue = null;
+        try {
+            csrfTokenName = SecurityUtil.getCsrfTokenName();
+            csrfTokenValue = SecurityUtil.getCsrfTokenValue(new LoginUriRequestWrapper(request, loginPath));
+        } catch (Exception e) {
+            LogUtil.info(getClass().getName(), "could not obtain CSRF token for auto-submit login form: " + e.getMessage());
+        }
+
+        StringBuilder html = new StringBuilder();
+        html.append("<!DOCTYPE html><html><head><title>Logging in...</title></head>");
+        html.append("<body onload=\"document.forms[0].submit()\">");
+        html.append("<form method=\"POST\" action=\"").append(escapeHtmlAttribute(loginPath)).append("\">");
+        html.append("<input type=\"hidden\" name=\"j_username\" value=\"").append(escapeHtmlAttribute(username)).append("\"/>");
+        html.append("<input type=\"hidden\" name=\"j_password\" value=\"").append(escapeHtmlAttribute(nonce)).append("\"/>");
+        if (csrfTokenName != null && csrfTokenValue != null && !csrfTokenValue.isEmpty()) {
+            html.append("<input type=\"hidden\" name=\"").append(escapeHtmlAttribute(csrfTokenName)).append("\" value=\"").append(escapeHtmlAttribute(csrfTokenValue)).append("\"/>");
+        }
+        html.append("</form></body></html>");
+        return html.toString();
+    }
+
+    protected String escapeHtmlAttribute(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
+    protected static PublicKey loadPublicKey(String publicKeyString) {
         PublicKey pub = null;
         try {
             X509EncodedKeySpec ks = new X509EncodedKeySpec(Base64.getDecoder().decode(publicKeyString));
             KeyFactory kf = KeyFactory.getInstance("RSA");
             pub = kf.generatePublic(ks);
         } catch (Exception e) {
-            LogUtil.info(getClass().getName(), "error loading public key: " + e.getMessage());
+            LogUtil.info(JwtSsoDirectoryManager.class.getName(), "error loading public key: " + e.getMessage());
         }
         return pub;
     }
